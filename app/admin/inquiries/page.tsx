@@ -1,53 +1,72 @@
-// Admin · Inquiries list
-import { prisma } from '@/lib/db';
+// Admin Inquiries page · list + status update
+'use client';
+import { useEffect, useState } from 'react';
 
-export const dynamic = 'force-dynamic';
+interface Inquiry { id: string; name: string; email: string; phone: string;
+  company: string; country: string; destinationPort: string | null;
+  message: string | null; urgency: string; status: string; createdAt: string; }
 
-const STATUS_BADGE: Record<string, string> = {
-  new: 'bg-orange-100 text-orange-700',
-  contacted: 'bg-blue-100 text-blue-700',
-  quoted: 'bg-purple-100 text-purple-700',
-  closed: 'bg-gray-100 text-gray-600',
-};
+export default function AdminInquiriesPage() {
+  const [items, setItems] = useState<Inquiry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-export default async function AdminInquiriesPage() {
-  const inquiries = await prisma.inquiry.findMany({
-    orderBy: { createdAt: 'desc' },
-    include: { user: true, container: { include: { items: true } } },
-  });
+  async function load() {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/admin/inquiries');
+      const json = await res.json();
+      setItems(json.inquiries ?? []);
+    } catch (e: any) { setError(e.message); }
+    setLoading(false);
+  }
+  useEffect(() => { load(); }, []);
+
+  async function patch(id: string, body: Partial<Inquiry>) {
+    const res = await fetch(`/api/admin/inquiries/${id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    if (!res.ok) { const j = await res.json().catch(() => ({})); setError(j.error || 'Patch failed'); return; }
+    load();
+  }
 
   return (
     <div>
-      <h1 className="font-display text-2xl font-semibold text-brand-900 mb-6">Inquiries ({inquiries.length})</h1>
-      {inquiries.length === 0 ? (
-        <div className="card p-12 text-center text-gray-500">No inquiries yet.</div>
-      ) : (
-        <div className="space-y-3">
-          {inquiries.map((i) => (
-            <div key={i.id} className="card p-5">
-              <div className="flex items-start justify-between gap-4 mb-3">
-                <div>
-                  <div className="font-semibold text-brand-900">{i.name} · {i.company}</div>
-                  <div className="text-sm text-gray-600">{i.email} · {i.phone} · {i.country}</div>
+      <h1 className="font-display text-2xl font-semibold text-brand-900 mb-4">Inquiries</h1>
+      {error && <div className="p-3 mb-3 bg-red-50 border border-red-200 text-red-700 rounded text-sm">{error}</div>}
+      {loading ? <div className="text-gray-500">Loading...</div> : (
+        <div className="space-y-2">
+          {items.map((i) => (
+            <div key={i.id} className="bg-white border border-gray-200 rounded p-4 flex items-start gap-4">
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="font-medium">{i.name}</span>
+                  <span className="text-gray-500 text-xs">·</span>
+                  <span className="text-gray-600 text-sm">{i.company}</span>
+                  <span className="text-gray-500 text-xs">·</span>
+                  <span className="text-gray-500 text-xs">{i.country}</span>
+                  <span className="text-gray-500 text-xs">·</span>
+                  <span className="text-gray-500 text-xs">{new Date(i.createdAt).toLocaleDateString()}</span>
                 </div>
-                <span className={`badge ${STATUS_BADGE[i.status] || 'bg-gray-100'}`}>{i.status}</span>
+                <div className="text-xs text-gray-600 mb-1">{i.email} · {i.phone}{i.destinationPort ? ` → ${i.destinationPort}` : ''}</div>
+                {i.message && <div className="text-sm text-gray-700 bg-gray-50 rounded p-2 mt-2">{i.message}</div>}
               </div>
-              {i.destinationPort && (
-                <div className="text-sm text-gray-600">📍 Destination: {i.destinationPort}</div>
-              )}
-              {i.container && (
-                <div className="text-sm text-gray-600">
-                  📦 Container: {i.container.items.length} items · {i.container.items.reduce((s, x) => s + x.quantity, 0)} pieces
-                </div>
-              )}
-              {i.message && (
-                <div className="mt-2 text-sm text-gray-700 italic border-l-2 border-brand-200 pl-3">"{i.message}"</div>
-              )}
-              <div className="mt-3 text-xs text-gray-400">
-                Submitted {i.createdAt.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}
+              <div className="flex flex-col gap-2 text-xs">
+                <select className="border rounded px-2 py-1" value={i.status} onChange={(e) => patch(i.id, { status: e.target.value })}>
+                  <option value="new">new</option>
+                  <option value="contacted">contacted</option>
+                  <option value="quoted">quoted</option>
+                  <option value="closed">closed</option>
+                </select>
+                <select className="border rounded px-2 py-1" value={i.urgency} onChange={(e) => patch(i.id, { urgency: e.target.value })}>
+                  <option value="low">low</option>
+                  <option value="normal">normal</option>
+                  <option value="high">high</option>
+                </select>
               </div>
             </div>
           ))}
+          {items.length === 0 && <div className="p-6 text-center text-gray-500 text-sm">No inquiries yet.</div>}
         </div>
       )}
     </div>

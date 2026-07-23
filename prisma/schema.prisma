@@ -1,7 +1,21 @@
-// Furnihub V1.0 · Prisma Schema
+// Furnihub V2.0 · Prisma Schema
+// v1.0 (Next.js + Tailwind) base + nangong Django reference design
 // Database: PostgreSQL (prod on Railway)
-// Note: V1.0 dev used SQLite. Production deployment switched to PostgreSQL
-// for ephemeral container persistence (Railway Volume requires paid plan).
+//
+// V2.0 commits (2026-07-23):
+//   - Preserve v1.0 fields for backward compatibility (existing 11 pages)
+//   - Add 10 new models borrowed from nangong Django reference:
+//     PartnerFactory / MemberProfile / Favorite / CartItem / ContainerType /
+//     ServiceFeeTier / OverboxRule / SavedContainer / QuoteRequest / CustomerNote
+//   - Improve Product fields (nangong spec, 45+ attrs vs v1.0 specs JSON)
+//   - Improve Inquiry fields (status workflow + container_snapshot + assignee + internal_notes)
+//   - Improve ServiceConfig + add tiered service fee model
+//
+// Pitfall log (recorded per Antty's request "踩坑一定要写日志"):
+//   - Adding Product fields is BACKWARD COMPATIBLE (all new optional fields)
+//   - Inquiry table: keep, add QuoteRequest as separate (don't rename)
+//   - ServiceConfig: keep, add ServiceFeeTier + OverboxRule as separate tables
+//   - seed.ts upserts ALL tables including new ones (idempotent)
 
 generator client {
   provider = "prisma-client-js"
@@ -12,23 +26,38 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ===== Users =====
+// ========================================================================
+// ===== Users & Auth =====
+// ========================================================================
+
 model User {
-  id            String    @id @default(cuid())
-  email         String    @unique
-  passwordHash  String
-  name          String?
-  company       String?
-  country       String
-  phone         String?
-  whatsapp      String?
-  role          String    @default("customer") // customer | admin
-  status        String    @default("active")   // active | pending | suspended
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  sessions      Session[]
-  containers    Container[]
-  inquiries     Inquiry[]
+  id              String           @id @default(cuid())
+  email           String           @unique
+  passwordHash    String
+  name            String?
+  username        String?          @unique                  // NEW V2.0: from nangong MemberProfile
+  company         String?
+  country         String           @default("CN")
+  phone           String?
+  whatsapp        String?
+  jobTitle        String?                                  // NEW V2.0
+  role            String           @default("customer")    // customer | admin
+  status          String           @default("pending")     // CHANGED V2.0: pending (default) | active | suspended
+  privacyAccepted Boolean          @default(false)          // NEW V2.0
+  marketingConsent Boolean         @default(false)          // NEW V2.0
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  sessions        Session[]
+  containers      Container[]
+  inquiries       Inquiry[]
+  memberProfile   MemberProfile?
+  favorites       Favorite[]
+  cartItems       CartItem[]
+  savedContainers SavedContainer[]
+  quoteRequests   QuoteRequest[]
+  customerNotes   CustomerNote[]   @relation("CustomerNotes")
+  authoredNotes   CustomerNote[]   @relation("AuthoredNotes")
+  assignedQuotes  QuoteRequest[]   @relation("AssignedQuotes")
 }
 
 model Session {
@@ -40,61 +69,195 @@ model Session {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
+model MemberProfile {
+  // 1:1 with User, holds extended business profile fields
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyName     String
+  contactName     String?
+  jobTitle        String?
+  phone           String
+  whatsapp        String?
+  country         String?
+  privacyAccepted Boolean  @default(false)
+  marketingConsent Boolean @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ========================================================================
 // ===== Catalog =====
+// ========================================================================
+
 model Category {
   id          String    @id @default(cuid())
-  slug        String    @unique  // sofa / bed / mattress / cabinet / table-chair
-  name        String              // "Sofa" / "Bed" / "Mattress" / "Cabinet" / "Table & Chair"
+  slug        String    @unique
+  name        String
   description String?
   bannerImage String?
   order       Int       @default(0)
+  active      Boolean   @default(true)
   products    Product[]
+  insights    Insight[]
 }
 
 model Product {
-  id              String    @id @default(cuid())
-  sku             String    @unique               // "SF-2401"
+  id              String           @id @default(cuid())
+  sku             String           @unique
   modelNo         String
   name            String
+  slug            String?          @unique                  // NEW V2.0
   categoryId      String
-  category        Category  @relation(fields: [categoryId], references: [id])
-  productType     String                          // Sofa / Loveseat / Sectional / Recliner
-  application     String                          // JSON: ["Living Room", "Hotel"]
-  fobPrice        Float                           // 注册前不显示
-  moq             Int       @default(5)
-  cbmPerPiece     Float                           // 单件体积 m³
-  description     String                          // 200-500 字
-  specs           String                          // JSON: 22 字段规格
-  colors          String                          // JSON: 颜色数组
-  images          String                          // JSON: 图片 URL 数组
-  featured        Boolean   @default(false)
-  active          Boolean   @default(true)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  category        Category         @relation(fields: [categoryId], references: [id])
+  productType     String
+  application     String                                    // JSON array
+  fobPrice        Float
+  moq             Int              @default(5)
+  cbmPerPiece     Float
+  description     String
+  shortDescription String?                                  // NEW V2.0
+  specs           String                                    // v1.0 JSON (22 fields)
+  colors          String                                    // JSON
+  images          String                                    // JSON
+  imageUrl        String?                                  // NEW V2.0: single hero URL
+  gallery         String?                                  // NEW V2.0: JSON array
+  videoUrl        String?                                  // NEW V2.0
+  material        String?                                  // NEW V2.0
+  style           String?                                  // NEW V2.0
+  // ===== NEW V2.0 detailed dimensions / construction =====
+  dimensionsIn    String?                                  // "W84\" × D36\" × H34\""
+  dimensionsCm    String?                                  // "W213 × D91 × H86cm"
+  seatWidth       String?
+  seatDepth       String?
+  seatHeight      String?
+  armHeight       String?
+  backHeight      String?
+  fabric          String?
+  frame           String?
+  filling         String?
+  legMaterial     String?
+  assembly        String?          @default("KD")          // KD | RTA | Assembled
+  hasStorage      Boolean          @default(false)
+  recline         Boolean          @default(false)
+  seating         Int              @default(1)
+  weightCapacity  String?
+  foamDensity     String?
+  certifications  String?
+  // ===== NEW V2.0 carton / packing =====
+  packingDimensions String?
+  leadTime        String?          @default("30-45 days")
+  cartonCbm       Float            @default(0.350)
+  unitsPerCarton  Int              @default(1)
+  cartonsPerUnit  Int              @default(1)
+  cartonLengthCm  Float            @default(100)
+  cartonWidthCm   Float            @default(70)
+  cartonHeightCm  Float            @default(50)
+  grossWeightKg   Float            @default(25)
+  stackable       Boolean          @default(true)
+  maxStackLayers  Int              @default(2)
+  rotatable       Boolean          @default(true)
+  fragile         Boolean          @default(false)
+  loadingColor    String?
+  // ===== flags =====
+  featured        Boolean          @default(false)
+  active          Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
   containerItems  ContainerItem[]
+  favorites       Favorite[]
+  cartItems       CartItem[]
 }
 
-// ===== Service Config =====
+// ========================================================================
+// ===== Partner Factory (NEW V2.0) =====
+// ========================================================================
+
+model PartnerFactory {
+  id               String   @id @default(cuid())
+  name             String   @unique
+  slug             String   @unique
+  location         String
+  specialty        String
+  established      Int
+  area             String?
+  employees        Int      @default(0)
+  productionLines  Int      @default(1)
+  monthlyCapacity  String
+  certifications   String?  // JSON
+  images           String?  // JSON
+  videoUrl         String?
+  description      String
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+// ========================================================================
+// ===== Service Config (V1.0 singleton + V2.0 tiered) =====
+// ========================================================================
+
 model ServiceConfig {
-  id                  String  @id @default(cuid())
-  serviceFeeRate      Float   @default(0.07)     // 7%
-  overboxThreshold    Int     @default(300)
-  overboxAmountPerBox Float   @default(2.0)      // USD
+  // v1.0 singleton (kept for back-compat)
+  id                  String   @id @default("singleton")
+  serviceFeeRate      Float    @default(0.07)   // 7% fallback default
+  overboxThreshold    Int      @default(300)
+  overboxAmountPerBox Float    @default(2.0)    // USD
   updatedAt           DateTime @updatedAt
   updatedBy           String?
 }
 
-// ===== MY Container =====
+model ServiceFeeTier {
+  // V2.0 tiered (5-10% by product value)
+  id              String   @id @default(cuid())
+  name            String
+  minProductValue Float    @default(0)
+  maxProductValue Float?
+  rate            Float                                // percentage
+  note            String?
+  effectiveFrom   DateTime @default(now())
+  active          Boolean  @default(true)
+}
+
+model OverboxRule {
+  // V2.0 configurable overbox rule
+  id            String   @id @default(cuid())
+  threshold     Int      @default(300)
+  feePerCarton  Float    @default(2.0)
+  note          String?
+  active        Boolean  @default(true)
+}
+
+model ContainerType {
+  // V2.0 configurable container types
+  id                 String   @id @default(cuid())
+  code               String   @unique   // "20GP" / "40GP" / "40HQ"
+  name               String
+  internalLengthCm   Float
+  internalWidthCm    Float
+  internalHeightCm   Float
+  nominalCbm         Float
+  safetyUtilization  Float    @default(90.0)  // % of nominal
+  maxPayloadKg       Float
+  sortOrder          Int      @default(0)
+  active             Boolean  @default(true)
+}
+
+// ========================================================================
+// ===== MY Container + CartItem + SavedContainer =====
+// ========================================================================
+
 model Container {
-  id          String    @id @default(cuid())
+  // v1.0: simple per-user container
+  id          String          @id @default(cuid())
   userId      String
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  cabinetType String    @default("40HQ")         // 20GP / 40GP / 40HQ
-  status      String    @default("active")       // active | submitted | archived
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cabinetType String          @default("40HQ")
+  status      String          @default("active")    // active | submitted | archived
   items       ContainerItem[]
   inquiry     Inquiry?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
 }
 
 model ContainerItem {
@@ -109,27 +272,133 @@ model ContainerItem {
   @@unique([containerId, productId])
 }
 
-// ===== Inquiry =====
-model Inquiry {
-  id               String    @id @default(cuid())
-  userId           String?
-  user             User?     @relation(fields: [userId], references: [id])
-  containerId      String?   @unique
-  container        Container? @relation(fields: [containerId], references: [id])
-  name             String
-  email            String
-  phone            String
-  whatsapp         String?
-  company          String
-  country          String
-  destinationPort  String?
-  message          String?
-  urgency          String    @default("normal")
-  status           String    @default("new")      // new | contacted | quoted | closed
-  createdAt        DateTime  @default(now())
+model CartItem {
+  // V2.0: user-level cart (separate from Container)
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  quantity  Int      @default(5)
+  updatedAt DateTime @updatedAt
+  @@unique([userId, productId])
 }
 
-// ===== FAQ =====
+model Favorite {
+  // V2.0: N:N user-product favorites
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  createdAt DateTime @default(now())
+  @@unique([userId, productId])
+}
+
+model SavedContainer {
+  // V2.0: saved plans with version control
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name          String
+  containerType String   @default("40HQ")
+  version       Int      @default(1)
+  status        String   @default("draft")    // draft | quoted | archived
+  snapshot      String                          // JSON of analyze_lines output
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  @@unique([userId, name, version])
+}
+
+// ========================================================================
+// ===== Inquiry (v1.0 simple + V2.0 QuoteRequest extended) =====
+// ========================================================================
+
+model Inquiry {
+  // v1.0 simple inquiry form submission
+  id              String     @id @default(cuid())
+  userId          String?
+  user            User?      @relation(fields: [userId], references: [id])
+  containerId     String?    @unique
+  container       Container? @relation(fields: [containerId], references: [id])
+  name            String
+  email           String
+  phone           String
+  whatsapp        String?
+  company         String
+  country         String
+  destinationPort String?
+  message         String?
+  urgency         String     @default("normal")
+  status          String     @default("new")    // new | contacted | quoted | closed
+  createdAt       DateTime   @default(now())
+}
+
+model QuoteRequest {
+  // V2.0: extended quote with container snapshot + status workflow + assignee + internal notes
+  id                String   @id @default(cuid())
+  userId            String?
+  user              User?    @relation(fields: [userId], references: [id])
+  name              String
+  email             String
+  phone             String
+  whatsapp          String?
+  company           String
+  country           String
+  destinationPort   String?
+  message           String?
+  urgency           String   @default("standard")    // standard | urgent
+  consent           Boolean  @default(false)
+  containerType     String   @default("40HQ")
+  containerSnapshot String?                          // JSON analyze_lines output
+  productValue      Float    @default(0)
+  serviceFee        Float    @default(0)
+  overboxFee        Float    @default(0)
+  totalCartons      Int      @default(0)
+  status            String   @default("new")        // new | contacted | quoted | won | closed
+  assigneeId        String?
+  assignee          User?    @relation("AssignedQuotes", fields: [assigneeId], references: [id])
+  internalNotes     String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model CustomerNote {
+  // V2.0: admin-authored follow-up notes per customer
+  id        String   @id @default(cuid())
+  customerId String
+  customer   User    @relation("CustomerNotes", fields: [customerId], references: [id], onDelete: Cascade)
+  authorId   String?
+  author     User?   @relation("AuthoredNotes", fields: [authorId], references: [id])
+  note       String
+  createdAt  DateTime @default(now())
+}
+
+// ========================================================================
+// ===== Insights / FAQ (v1.0 + V2.0 enrichment) =====
+// ========================================================================
+
+model Insight {
+  // V2.0: promoted from hardcoded InsightArticle
+  id                String   @id @default(cuid())
+  title             String
+  slug              String   @unique
+  excerpt           String
+  body              String   // markdown
+  heroImage         String?
+  categoryId        String?
+  category          Category? @relation(fields: [categoryId], references: [id])
+  publishedAt       DateTime
+  readTime          Int      @default(6)            // minutes
+  author            String   @default("Furnihub Sourcing Team")
+  authorCredentials String?
+  sources           String?  // JSON
+  featured          Boolean  @default(false)
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
 model FaqCategory {
   id     String @id @default(cuid())
   slug   String @unique
@@ -139,10 +408,30 @@ model FaqCategory {
 }
 
 model Faq {
-  id         String      @id @default(cuid())
-  categoryId String
-  category   FaqCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-  question   String
-  answer     String
-  order      Int         @default(0)
+  id            String      @id @default(cuid())
+  categoryId    String
+  category      FaqCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  question      String
+  answer        String
+  relatedLinks  String?     // JSON
+  lastUpdated   DateTime    @updatedAt
+  order         Int         @default(0)
+  active        Boolean     @default(true)
+}
+
+// ========================================================================
+// ===== Contract (V2.0 legacy project inquiry, from nangong) =====
+// ========================================================================
+
+model Contract {
+  id                String   @id @default(cuid())
+  contactName       String
+  phone             String
+  companyBrand      String
+  projectType       String
+  estimatedQuantity String?
+  deliveryCity      String?
+  budgetRange       String?
+  requirements      String
+  createdAt         DateTime @default(now())
 }
