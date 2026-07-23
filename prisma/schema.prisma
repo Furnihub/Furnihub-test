@@ -1,12 +1,14 @@
 // Furnihub V1.0 · Prisma Schema
-// Database: SQLite (dev) · Postgres (prod later)
+// Database: PostgreSQL (prod on Railway)
+// Note: V1.0 dev used SQLite. Production deployment switched to PostgreSQL
+// for ephemeral container persistence (Railway Volume requires paid plan).
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
