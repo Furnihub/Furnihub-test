@@ -15,7 +15,7 @@ const schema = z.object({
   whatsapp: z.string().optional(),
 });
 
-export async function signup(prevState: any, formData: FormData) {
+export async function signup(formData: FormData) {
   const parsed = schema.safeParse(Object.fromEntries(formData));
   if (!parsed.success) {
     redirect(`/signup?error=${encodeURIComponent('Invalid input. Please check all fields.')}`);

@@ -4,7 +4,7 @@ import { prisma } from '@/lib/db';
 import { createSession } from '@/lib/auth';
 import bcrypt from 'bcryptjs';
 
-export async function login(prevState: any, formData: FormData) {
+export async function login(formData: FormData) {
   const email = formData.get('email') as string;
   const password = formData.get('password') as string;
   const redirectTo = (formData.get('redirect') as string) || '/container';
