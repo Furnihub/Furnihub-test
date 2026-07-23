@@ -1,0 +1,146 @@
+// Furnihub V1.0 · Prisma Schema
+// Database: SQLite (dev) · Postgres (prod later)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ===== Users =====
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  name          String?
+  company       String?
+  country       String
+  phone         String?
+  whatsapp      String?
+  role          String    @default("customer") // customer | admin
+  status        String    @default("active")   // active | pending | suspended
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  sessions      Session[]
+  containers    Container[]
+  inquiries     Inquiry[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ===== Catalog =====
+model Category {
+  id          String    @id @default(cuid())
+  slug        String    @unique  // sofa / bed / mattress / cabinet / table-chair
+  name        String              // "Sofa" / "Bed" / "Mattress" / "Cabinet" / "Table & Chair"
+  description String?
+  bannerImage String?
+  order       Int       @default(0)
+  products    Product[]
+}
+
+model Product {
+  id              String    @id @default(cuid())
+  sku             String    @unique               // "SF-2401"
+  modelNo         String
+  name            String
+  categoryId      String
+  category        Category  @relation(fields: [categoryId], references: [id])
+  productType     String                          // Sofa / Loveseat / Sectional / Recliner
+  application     String                          // JSON: ["Living Room", "Hotel"]
+  fobPrice        Float                           // 注册前不显示
+  moq             Int       @default(5)
+  cbmPerPiece     Float                           // 单件体积 m³
+  description     String                          // 200-500 字
+  specs           String                          // JSON: 22 字段规格
+  colors          String                          // JSON: 颜色数组
+  images          String                          // JSON: 图片 URL 数组
+  featured        Boolean   @default(false)
+  active          Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  containerItems  ContainerItem[]
+}
+
+// ===== Service Config =====
+model ServiceConfig {
+  id                  String  @id @default(cuid())
+  serviceFeeRate      Float   @default(0.07)     // 7%
+  overboxThreshold    Int     @default(300)
+  overboxAmountPerBox Float   @default(2.0)      // USD
+  updatedAt           DateTime @updatedAt
+  updatedBy           String?
+}
+
+// ===== MY Container =====
+model Container {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cabinetType String    @default("40HQ")         // 20GP / 40GP / 40HQ
+  status      String    @default("active")       // active | submitted | archived
+  items       ContainerItem[]
+  inquiry     Inquiry?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model ContainerItem {
+  id           String    @id @default(cuid())
+  containerId  String
+  container    Container @relation(fields: [containerId], references: [id], onDelete: Cascade)
+  productId    String
+  product      Product   @relation(fields: [productId], references: [id])
+  quantity     Int       @default(5)
+  unitFob      Float
+  cbmPerPiece  Float
+  @@unique([containerId, productId])
+}
+
+// ===== Inquiry =====
+model Inquiry {
+  id               String    @id @default(cuid())
+  userId           String?
+  user             User?     @relation(fields: [userId], references: [id])
+  containerId      String?   @unique
+  container        Container? @relation(fields: [containerId], references: [id])
+  name             String
+  email            String
+  phone            String
+  whatsapp         String?
+  company          String
+  country          String
+  destinationPort  String?
+  message          String?
+  urgency          String    @default("normal")
+  status           String    @default("new")      // new | contacted | quoted | closed
+  createdAt        DateTime  @default(now())
+}
+
+// ===== FAQ =====
+model FaqCategory {
+  id     String @id @default(cuid())
+  slug   String @unique
+  name   String
+  order  Int    @default(0)
+  faqs   Faq[]
+}
+
+model Faq {
+  id         String      @id @default(cuid())
+  categoryId String
+  category   FaqCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  question   String
+  answer     String
+  order      Int         @default(0)
+}
